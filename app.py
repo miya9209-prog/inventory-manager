@@ -28,6 +28,13 @@ st.markdown("""
 .sub-title {
     font-size: 15px;
     color: #666;
+    margin-bottom: 30px;
+}
+.notice-box {
+    border: 1px solid #e9e9e9;
+    background: #fafafa;
+    border-radius: 14px;
+    padding: 18px 20px;
     margin-bottom: 26px;
 }
 .stTabs [data-baseweb="tab-list"] {
@@ -51,34 +58,42 @@ db = DB(DB_PATH)
 
 st.markdown("<div class='main-title'>재고 관제센터</div>", unsafe_allow_html=True)
 st.markdown(
-    "<div class='sub-title'>카페24 판매상태와 셀메이트 실제재고 엑셀을 함께 보고, 품절위험·입고추천·시즌오픈추천·악성재고를 자동 분류합니다.</div>",
+    "<div class='sub-title'>셀메이트 실제재고 엑셀을 직접 업로드해 DB를 업데이트하고, 카페24 판매상태와 비교해 품절위험·입고추천·시즌오픈추천·악성재고를 판단합니다.</div>",
     unsafe_allow_html=True
 )
 
-with st.expander("데이터 설정 / 카페24 API / 셀메이트 엑셀 업로드", expanded=False):
-    mode = st.radio("데이터 모드", ["샘플 데이터", "카페24 API 연동"], index=0 if USE_SAMPLE else 1, horizontal=True)
+st.markdown("""
+<div class='notice-box'>
+<b>운영 기준</b><br>
+1. 매일 오후 1~2시경 셀메이트에서 재고 엑셀을 다운로드합니다.<br>
+2. 아래 <b>셀메이트 재고 DB 업데이트</b> 영역에 엑셀을 업로드합니다.<br>
+3. 업로드 즉시 셀메이트 실제재고가 DB에 저장되고, 이 값을 기준재고로 사용합니다.<br>
+4. 카페24는 상품/주문/품절상태 확인용으로만 사용합니다.
+</div>
+""", unsafe_allow_html=True)
 
-    st.markdown("#### 1) 샘플 데이터")
-    if st.button("샘플 데이터 새로 넣기"):
-        seed(db)
-        st.success("샘플 데이터가 입력되었습니다.")
-        st.rerun()
-
-    st.divider()
-    st.markdown("#### 2) 셀메이트 실제재고 엑셀 업로드")
-    st.caption("매일 오후 1~2시경 셀메이트에서 재고 엑셀을 내려받아 업로드하세요. 이 값이 실제 기준재고로 사용됩니다.")
+with st.expander("셀메이트 재고 DB 업데이트 / 카페24 동기화", expanded=True):
+    st.markdown("### 1) 셀메이트 재고 DB 업데이트")
+    st.caption("셀메이트 엑셀을 업로드하면 기존 셀메이트 재고 DB를 새 파일 기준으로 전체 교체합니다.")
     uploaded = st.file_uploader("셀메이트 재고 엑셀 업로드", type=["xlsx", "xls", "csv"])
+
     if uploaded is not None:
         try:
             stock_df = parse_sellmate_excel(uploaded)
-            db.replace_sellmate_stock(stock_df)
-            st.success(f"셀메이트 실제재고 {len(stock_df)}건 업데이트 완료")
-            st.dataframe(stock_df.head(30), use_container_width=True, hide_index=True)
+            st.write("업로드 파일 미리보기")
+            st.dataframe(stock_df.head(50), use_container_width=True, hide_index=True)
+
+            if st.button("셀메이트 재고 DB 업데이트", type="primary"):
+                db.replace_sellmate_stock(stock_df)
+                st.success(f"셀메이트 재고 DB 업데이트 완료: {len(stock_df)}건")
+                st.rerun()
         except Exception as e:
             st.error(f"셀메이트 엑셀 처리 실패: {e}")
 
     st.divider()
-    st.markdown("#### 3) 카페24 인증 / 상품·주문 동기화")
+    st.markdown("### 2) 카페24 상품/주문 동기화")
+    st.caption("카페24는 상품명, 판매상태, 진열상태, 품절상태, 주문 판매속도 확인용으로 사용합니다.")
+
     mall_id = get_secret("cafe24", "mall_id")
     client_id = get_secret("cafe24", "client_id")
     client_secret = get_secret("cafe24", "client_secret")
@@ -90,37 +105,49 @@ with st.expander("데이터 설정 / 카페24 API / 셀메이트 엑셀 업로�
     cafe = Cafe24Client(mall_id, client_id, client_secret, redirect_uri, access_token, refresh_token, api_version)
     scopes = ["mall.read_product", "mall.read_order"]
 
-    if mall_id and client_id and redirect_uri:
-        st.link_button("카페24 권한 승인 URL 열기", cafe.auth_url(scopes))
-    else:
-        st.warning("Streamlit Secrets에 cafe24 mall_id/client_id/redirect_uri를 먼저 입력하세요.")
+    col_auth, col_sync, col_sample = st.columns(3)
 
-    code = st.text_input("승인 후 code 붙여넣기", type="password")
-    if st.button("Access Token 발급") and code:
-        try:
-            token = cafe.exchange_code(code)
-            st.success("토큰 발급 성공. 아래 access_token / refresh_token 값을 Streamlit Secrets에 저장하세요.")
-            st.json(token)
-        except Exception as e:
-            st.error(f"토큰 발급 실패: {e}")
+    with col_auth:
+        if mall_id and client_id and redirect_uri:
+            st.link_button("카페24 권한 승인 URL 열기", cafe.auth_url(scopes))
+        else:
+            st.warning("Secrets에 카페24 설정이 필요합니다.")
 
-    if st.button("카페24 상품/주문 동기화"):
-        try:
-            products_payload = cafe.fetch_products(limit=100)
-            rows, inv = cafe.normalize_products(products_payload)
-            db.upsert_products(rows)
-            db.insert_inventory_snapshots(inv)
+    with col_sync:
+        if st.button("카페24 상품/주문 동기화"):
+            try:
+                products_payload = cafe.fetch_products(limit=100)
+                rows, inv = cafe.normalize_products(products_payload)
+                db.upsert_products(rows)
+                db.insert_inventory_snapshots(inv)
 
-            orders_payload = cafe.fetch_orders(days=14, limit=100)
-            sales = cafe.normalize_orders(orders_payload)
-            if sales:
-                db.upsert_sales_daily(sales)
+                orders_payload = cafe.fetch_orders(days=14, limit=100)
+                sales = cafe.normalize_orders(orders_payload)
+                if sales:
+                    db.upsert_sales_daily(sales)
 
-            st.success(f"동기화 완료: 상품 {len(rows)}개, 주문일별 {len(sales)}건")
-        except Exception as e:
-            st.error(f"동기화 실패: {e}")
+                st.success(f"동기화 완료: 상품 {len(rows)}개, 주문일별 {len(sales)}건")
+                st.rerun()
+            except Exception as e:
+                st.error(f"동기화 실패: {e}")
 
-if mode == "샘플 데이터":
+    with col_sample:
+        if st.button("샘플 데이터 새로 넣기"):
+            seed(db)
+            st.success("샘플 데이터가 입력되었습니다.")
+            st.rerun()
+
+    with st.expander("Access Token 발급"):
+        code = st.text_input("카페24 승인 후 code 붙여넣기", type="password")
+        if st.button("Access Token 발급") and code:
+            try:
+                token = cafe.exchange_code(code)
+                st.success("토큰 발급 성공. 아래 access_token / refresh_token 값을 Streamlit Secrets에 저장하세요.")
+                st.json(token)
+            except Exception as e:
+                st.error(f"토큰 발급 실패: {e}")
+
+if USE_SAMPLE:
     if db.df("SELECT COUNT(*) AS cnt FROM products").iloc[0].cnt == 0:
         seed(db)
 
@@ -130,7 +157,7 @@ alerts = generate_alerts(metrics, season_df)
 db.replace_alerts(alerts)
 
 if metrics.empty:
-    st.warning("아직 데이터가 없습니다. 샘플 데이터를 넣거나 카페24 API 동기화/셀메이트 엑셀 업로드를 실행하세요.")
+    st.warning("아직 데이터가 없습니다. 샘플 데이터를 넣거나 카페24 동기화/셀메이트 엑셀 업로드를 실행하세요.")
     st.stop()
 
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -142,7 +169,7 @@ c5.metric("악성재고 후보", int((metrics["상태"] == "악성재고후보")
 
 st.divider()
 
-tabs = st.tabs(["오늘의 긴급 알림", "품절 위험", "입고 추천", "시즌 오픈 추천", "악성재고 소진", "전체 상품"])
+tabs = st.tabs(["오늘의 긴급 알림", "품절 위험", "입고 추천", "시즌 오픈 추천", "악성재고 소진", "전체 상품", "셀메이트 DB"])
 
 show_cols = [
     "product_no", "상품명", "카테고리", "셀메이트재고", "카페24재고", "기준재고",
@@ -205,11 +232,10 @@ with tabs[5]:
         filtered = filtered[filtered["상품명"].str.contains(keyword, case=False, na=False)]
     st.dataframe(filtered[show_cols], use_container_width=True, hide_index=True)
 
-st.divider()
-st.markdown("""
-### 운영 방식
-1. 매일 오후 1~2시경 셀메이트 재고 엑셀을 업로드합니다.  
-2. 카페24 상품/주문 동기화를 실행합니다.  
-3. 재고 관제센터는 셀메이트 실제재고를 기준으로 품절위험·입고추천·악성재고를 판단합니다.  
-4. 카페24 재고/품절/판매상태는 매출 손실 감지용으로 사용합니다.
-""")
+with tabs[6]:
+    st.subheader("현재 저장된 셀메이트 재고 DB")
+    sm_df = db.df("SELECT product_no, product_name, option_name, sellmate_stock, updated_at FROM sellmate_stock ORDER BY updated_at DESC")
+    if sm_df.empty:
+        st.info("아직 업로드된 셀메이트 재고 DB가 없습니다.")
+    else:
+        st.dataframe(sm_df, use_container_width=True, hide_index=True)
