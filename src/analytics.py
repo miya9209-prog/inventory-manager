@@ -1,124 +1,133 @@
-from datetime import date, timedelta
 import pandas as pd
-from src.db import now_iso
-from src.season_rules import current_season_tags
+from datetime import date, timedelta
+import math
 
-def latest_inventory(db):
-    return db.df("""
-    SELECT i.* FROM inventory_snapshots i
-    JOIN (
-      SELECT product_no, option_name, MAX(captured_at) AS max_captured
-      FROM inventory_snapshots GROUP BY product_no, option_name
-    ) x ON i.product_no=x.product_no AND i.option_name=x.option_name AND i.captured_at=x.max_captured
-    """)
+CURRENT_MONTH_TAGS = {
+    1: ["겨울", "니트", "아우터"],
+    2: ["겨울", "봄", "간절기"],
+    3: ["봄", "간절기", "자켓", "셔츠"],
+    4: ["봄", "가정의달", "모임룩", "셔츠", "조끼"],
+    5: ["여름", "가정의달", "모임룩", "린넨", "조끼", "니트"],
+    6: ["여름", "린넨", "시어서커", "살안타템", "냉감"],
+    7: ["여름", "휴가룩", "장마", "쿨링", "원피스"],
+    8: ["여름", "휴가룩", "초가을"],
+    9: ["가을", "간절기", "자켓", "셔츠"],
+    10: ["가을", "니트", "자켓", "모임룩"],
+    11: ["겨울", "니트", "아우터"],
+    12: ["겨울", "연말모임", "아우터"],
+}
 
 def build_product_metrics(db):
     products = db.df("SELECT * FROM products")
-    inv = latest_inventory(db)
-    sales = db.df("SELECT * FROM sales_daily")
     if products.empty:
         return pd.DataFrame()
+
+    inv = db.df("""
+        SELECT product_no, option_name, cafe24_stock, cafe24_soldout_status
+        FROM inventory_snapshots
+        WHERE id IN (SELECT MAX(id) FROM inventory_snapshots GROUP BY product_no, option_name)
+    """)
+    sm = db.df("SELECT product_no, SUM(sellmate_stock) AS sellmate_stock FROM sellmate_stock GROUP BY product_no")
+    sales = db.df("SELECT product_no, sales_date, SUM(order_qty) AS order_qty FROM sales_daily GROUP BY product_no, sales_date")
+
+    df = products.rename(columns={
+        "product_name":"상품명",
+        "category":"카테고리",
+        "cafe24_display_status":"진열",
+        "cafe24_selling_status":"판매",
+        "season_tags":"시즌태그",
+    })
+
     if inv.empty:
-        inv = pd.DataFrame(columns=["product_no","option_name","cafe24_stock","sellmate_stock","cafe24_soldout_status"])
-    if sales.empty:
-        sales = pd.DataFrame(columns=["product_no","option_name","sales_date","order_qty","shipped_qty","returned_qty"])
+        inv = pd.DataFrame(columns=["product_no", "cafe24_stock", "cafe24_soldout_status"])
+    inv_sum = inv.groupby("product_no", as_index=False).agg({
+        "cafe24_stock":"sum",
+        "cafe24_soldout_status":"max"
+    }).rename(columns={"cafe24_stock":"카페24재고", "cafe24_soldout_status":"품절"})
+
+    df = df.merge(inv_sum, on="product_no", how="left")
+    df = df.merge(sm.rename(columns={"sellmate_stock":"셀메이트재고"}), on="product_no", how="left")
 
     today = date.today()
-    rows = []
-    for _, p in products.iterrows():
-        pno = str(p.product_no)
-        pi = inv[inv.product_no.astype(str) == pno]
-        stock = int(pi["cafe24_stock"].fillna(0).sum()) if not pi.empty else 0
-        sellmate_stock = int(pi["sellmate_stock"].fillna(0).sum()) if not pi.empty else None
-        ps = sales[sales.product_no.astype(str) == pno].copy()
-        if not ps.empty:
-            ps["sales_date"] = pd.to_datetime(ps["sales_date"]).dt.date
-            s3 = int(ps[ps.sales_date >= today - timedelta(days=2)]["order_qty"].sum())
-            s7 = int(ps[ps.sales_date >= today - timedelta(days=6)]["order_qty"].sum())
-            s14 = int(ps[ps.sales_date >= today - timedelta(days=13)]["order_qty"].sum())
-            s30 = int(ps[ps.sales_date >= today - timedelta(days=29)]["order_qty"].sum())
-        else:
-            s3=s7=s14=s30=0
-        avg_daily = max(s7 / 7, s14 / 14, 0)
-        days_to_soldout = round(stock / avg_daily, 1) if avg_daily > 0 else None
-        lead = int(p.get("lead_time_days", 3) or 3)
-        safety = int(p.get("safety_stock", 5) or 5)
-        reco = int(max((avg_daily * lead) + safety - stock, 0))
-        rows.append({
-            "product_no": pno,
-            "상품명": p.product_name,
-            "카테고리": p.category,
-            "진열": p.cafe24_display_status,
-            "판매": p.cafe24_selling_status,
-            "품절": p.cafe24_soldout_status,
-            "재고": stock,
-            "물류재고": sellmate_stock,
-            "3일판매": s3,
-            "7일판매": s7,
-            "14일판매": s14,
-            "30일판매": s30,
-            "일평균판매": round(avg_daily, 2),
-            "예상품절일": days_to_soldout,
-            "추천입고수량": reco,
-            "시즌태그": p.season_tags or "",
-            "리드타임": lead,
-            "안전재고": safety,
-        })
-    return pd.DataFrame(rows)
+    def sales_n(n):
+        if sales.empty:
+            return pd.DataFrame(columns=["product_no", f"{n}일판매"])
+        start = today - timedelta(days=n-1)
+        s = sales[pd.to_datetime(sales["sales_date"]).dt.date >= start]
+        return s.groupby("product_no", as_index=False)["order_qty"].sum().rename(columns={"order_qty":f"{n}일판매"})
 
-def classify(metrics: pd.DataFrame):
-    if metrics.empty:
-        return metrics
-    df = metrics.copy()
-    def status(row):
-        soldout = str(row.get("품절", "")).upper() in ["T", "Y", "TRUE", "SOLDOUT"] or row.get("재고",0) <= 0
-        if soldout and row.get("7일판매",0) > 0:
-            return "이미품절_인기"
-        d = row.get("예상품절일")
-        if d is not None and row.get("일평균판매",0) > 0:
-            if d <= 1: return "긴급품절위험"
-            if d <= 3: return "품절위험"
-            if d <= 7: return "품절주의"
-        if row.get("재고",0) >= 30 and row.get("30일판매",0) <= 3:
-            return "악성재고후보"
-        return "정상"
-    df["상태"] = df.apply(status, axis=1)
+    for n in [3, 7, 14, 30]:
+        df = df.merge(sales_n(n), on="product_no", how="left")
+
+    for col in ["카페24재고", "셀메이트재고", "3일판매", "7일판매", "14일판매", "30일판매"]:
+        if col not in df.columns:
+            df[col] = 0
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    df["기준재고"] = df["셀메이트재고"]
+    df.loc[df["셀메이트재고"].isna(), "기준재고"] = df.loc[df["셀메이트재고"].isna(), "카페24재고"]
+    df["기준재고"] = df["기준재고"].fillna(0)
+
+    avg_daily = df["7일판매"] / 7
+    df["예상품절일"] = df.apply(lambda r: round(r["기준재고"] / (r["7일판매"]/7), 1) if r["7일판매"] > 0 else None, axis=1)
+    df["추천입고수량"] = ((avg_daily * df["lead_time_days"].fillna(3)) + df["safety_stock"].fillna(5) - df["기준재고"]).apply(lambda x: max(0, math.ceil(x)))
     return df
 
-def season_open_candidates(metrics: pd.DataFrame, month=None):
-    if metrics.empty:
-        return metrics
-    tags = set(current_season_tags(month))
-    def match(row):
-        rowtags = set([x.strip() for x in str(row.get("시즌태그","")).split(",") if x.strip()])
-        has_stock = row.get("재고",0) >= 10
-        display_off = str(row.get("진열","")).upper() in ["F", "N", "FALSE", "DISPLAY_OFF", ""]
-        low_sales = row.get("7일판매",0) <= 2
-        return has_stock and bool(tags & rowtags) and (display_off or low_sales)
-    return metrics[metrics.apply(match, axis=1)].copy()
+def _is_truthy_series(s):
+    return s.astype(str).str.upper().isin(["T", "Y", "TRUE", "1", "품절"])
 
-def generate_alerts(metrics: pd.DataFrame, season_df: pd.DataFrame):
-    alerts = []
-    for _, r in metrics.iterrows():
-        st = r.get("상태")
-        if st in ["이미품절_인기", "긴급품절위험", "품절위험", "품절주의", "악성재고후보"]:
-            severity = "high" if st in ["이미품절_인기", "긴급품절위험"] else "medium"
-            if st == "악성재고후보": severity = "low"
-            alerts.append({
-                "alert_type": st,
-                "product_no": r["product_no"],
-                "option_name": "전체",
-                "severity": severity,
-                "message": f"{r['상품명']} / 재고 {r['재고']} / 7일판매 {r['7일판매']} / 예상품절 {r['예상품절일']}",
-                "created_at": now_iso(),
-            })
+def classify(df):
+    if df.empty:
+        return df
+    df = df.copy()
+    df["상태"] = "정상"
+
+    cafe_soldout = _is_truthy_series(df["품절"])
+    cafe_stock_zero = df["카페24재고"].fillna(0) <= 0
+    sm_stock_zero = df["셀메이트재고"].fillna(0) <= 0
+    selling_on = df["판매"].astype(str).str.upper().isin(["T", "Y", "TRUE", "1", "판매중"])
+
+    df.loc[(sm_stock_zero) & (df["7일판매"] >= 5), "상태"] = "실제재고품절_인기"
+    df.loc[(cafe_soldout) & (df["7일판매"] >= 5), "상태"] = "카페24품절처리_인기"
+    df.loc[(cafe_stock_zero | cafe_soldout) & (df["셀메이트재고"] > 0), "상태"] = "카페24품절_실제재고있음"
+    df.loc[(sm_stock_zero) & (selling_on) & (~cafe_soldout), "상태"] = "실제재고없음_판매중위험"
+
+    days = pd.to_numeric(df["예상품절일"], errors="coerce")
+    df.loc[(df["상태"] == "정상") & (days <= 1), "상태"] = "긴급품절위험"
+    df.loc[(df["상태"] == "정상") & (days > 1) & (days <= 3), "상태"] = "품절위험"
+    df.loc[(df["상태"] == "정상") & (days > 3) & (days <= 7), "상태"] = "품절주의"
+    df.loc[(df["상태"] == "정상") & (df["기준재고"] >= 30) & (df["30일판매"] <= 3), "상태"] = "악성재고후보"
+    return df
+
+def season_open_candidates(df):
+    if df.empty:
+        return df
+    tags = CURRENT_MONTH_TAGS.get(date.today().month, [])
+    pattern = "|".join(tags)
+    if not pattern:
+        return df.iloc[0:0]
+    has_season = df["시즌태그"].fillna("").str.contains(pattern, case=False, regex=True)
+    weak_exposure = (df["진열"].astype(str).str.upper() != "T") | (df["7일판매"] <= 2)
+    enough_stock = df["기준재고"] >= 10
+    return df[has_season & weak_exposure & enough_stock].copy()
+
+def generate_alerts(metrics, season_df):
+    rows = []
+    if metrics.empty:
+        return rows
+    urgent_states = ["실제재고품절_인기","카페24품절처리_인기","카페24품절_실제재고있음","실제재고없음_판매중위험","긴급품절위험","품절위험"]
+    for _, r in metrics[metrics["상태"].isin(urgent_states)].iterrows():
+        rows.append({
+            "alert_type": r["상태"],
+            "product_no": r["product_no"],
+            "severity": "high",
+            "message": f"{r['상품명']} · 상태 {r['상태']} · 셀메이트재고 {r['셀메이트재고']} / 카페24재고 {r['카페24재고']}"
+        })
     for _, r in season_df.iterrows():
-        alerts.append({
+        rows.append({
             "alert_type": "시즌오픈추천",
             "product_no": r["product_no"],
-            "option_name": "전체",
             "severity": "medium",
-            "message": f"{r['상품명']} / 현재 시즌 태그 {r['시즌태그']} / 재고 {r['재고']} / 진열 {r['진열']}",
-            "created_at": now_iso(),
+            "message": f"{r['상품명']} · 시즌태그 {r['시즌태그']} · 실제재고 {r['기준재고']}"
         })
-    return alerts
+    return rows
