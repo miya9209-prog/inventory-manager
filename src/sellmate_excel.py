@@ -4,13 +4,22 @@ COLUMN_CANDIDATES = {
     "product_no": ["product_no", "상품코드", "상품번호", "판매처상품코드", "자체상품코드", "품목코드", "코드"],
     "product_name": ["product_name", "상품명", "품목명", "제품명"],
     "option_name": ["option_name", "옵션명", "옵션", "색상/사이즈", "품목옵션"],
-    "sellmate_stock": ["sellmate_stock", "재고", "현재고", "실재고", "가용재고", "재고수량", "수량"],
+    "sellmate_stock": ["가용재고", "sellmate_stock", "재고", "현재고", "실재고", "가용재고", "재고수량", "수량"],
 }
 
 def _read(file):
-    name = getattr(file, "name", "")
-    if name.lower().endswith(".csv"):
-        return pd.read_csv(file)
+    name = getattr(file, "name", "").lower()
+    if name.endswith(".csv"):
+        encodings = ["utf-8-sig", "cp949", "euc-kr", "utf-8"]
+        last_error = None
+        for enc in encodings:
+            try:
+                file.seek(0)
+                return pd.read_csv(file, encoding=enc)
+            except UnicodeDecodeError as e:
+                last_error = e
+                continue
+        raise last_error
     return pd.read_excel(file)
 
 def _find_col(df, candidates):
@@ -28,8 +37,9 @@ def _find_col(df, candidates):
 
 def parse_sellmate_excel(file):
     df = _read(file)
+    df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
     if df.empty:
-        raise ValueError("엑셀에 데이터가 없습니다.")
+        raise ValueError("파일에 데이터가 없습니다.")
 
     mapped = {}
     for target, cands in COLUMN_CANDIDATES.items():
@@ -37,14 +47,20 @@ def parse_sellmate_excel(file):
         if col is not None:
             mapped[target] = col
 
-    if "product_no" not in mapped:
-        raise ValueError("상품코드 컬럼을 찾지 못했습니다. 엑셀에 상품코드/상품번호/판매처상품코드 중 하나가 필요합니다.")
+    if "product_name" not in mapped and "product_no" not in mapped:
+        raise ValueError("상품명 또는 상품코드 컬럼을 찾지 못했습니다.")
     if "sellmate_stock" not in mapped:
-        raise ValueError("재고 컬럼을 찾지 못했습니다. 엑셀에 재고/현재고/실재고/재고수량 중 하나가 필요합니다.")
+        raise ValueError("재고 컬럼을 찾지 못했습니다. 가용재고/현재재고/재고수량 중 하나가 필요합니다.")
 
     out = pd.DataFrame()
-    out["product_no"] = df[mapped["product_no"]].astype(str).str.strip()
-    out["product_name"] = df[mapped["product_name"]].astype(str).str.strip() if "product_name" in mapped else ""
+
+    if "product_no" in mapped:
+        out["product_no"] = df[mapped["product_no"]].astype(str).str.strip()
+    else:
+        # 셀메이트 파일에 상품코드가 없는 경우 상품명을 임시 키로 사용
+        out["product_no"] = df[mapped["product_name"]].astype(str).str.strip()
+
+    out["product_name"] = df[mapped["product_name"]].astype(str).str.strip() if "product_name" in mapped else out["product_no"]
     out["option_name"] = df[mapped["option_name"]].astype(str).str.strip() if "option_name" in mapped else ""
     out["sellmate_stock"] = pd.to_numeric(df[mapped["sellmate_stock"]], errors="coerce").fillna(0).astype(int)
 

@@ -19,6 +19,18 @@ CURRENT_MONTH_TAGS = {
 
 def build_product_metrics(db):
     products = db.df("SELECT * FROM products")
+    sm_raw = db.df("SELECT product_no, product_name, SUM(sellmate_stock) AS sellmate_stock FROM sellmate_stock GROUP BY product_no, product_name")
+    if products.empty and not sm_raw.empty:
+        # 카페24 동기화 전에도 셀메이트 DB만으로 화면 확인 가능
+        products = sm_raw.rename(columns={"product_name":"product_name"})[["product_no", "product_name"]].copy()
+        products["category"] = ""
+        products["image_url"] = ""
+        products["cafe24_display_status"] = "T"
+        products["cafe24_selling_status"] = "T"
+        products["season_tags"] = ""
+        products["supplier_name"] = ""
+        products["lead_time_days"] = 3
+        products["safety_stock"] = 5
     if products.empty:
         return pd.DataFrame()
 
@@ -27,7 +39,6 @@ def build_product_metrics(db):
         FROM inventory_snapshots
         WHERE id IN (SELECT MAX(id) FROM inventory_snapshots GROUP BY product_no, option_name)
     """)
-    sm = db.df("SELECT product_no, SUM(sellmate_stock) AS sellmate_stock FROM sellmate_stock GROUP BY product_no")
     sales = db.df("SELECT product_no, sales_date, SUM(order_qty) AS order_qty FROM sales_daily GROUP BY product_no, sales_date")
 
     df = products.rename(columns={
@@ -45,8 +56,14 @@ def build_product_metrics(db):
         "cafe24_soldout_status":"max"
     }).rename(columns={"cafe24_stock":"카페24재고", "cafe24_soldout_status":"품절"})
 
+    sm_by_no = sm_raw.groupby("product_no", as_index=False)["sellmate_stock"].sum().rename(columns={"sellmate_stock":"셀메이트재고"})
+    sm_by_name = sm_raw.groupby("product_name", as_index=False)["sellmate_stock"].sum().rename(columns={"product_name":"상품명", "sellmate_stock":"셀메이트재고_상품명매칭"})
+
     df = df.merge(inv_sum, on="product_no", how="left")
-    df = df.merge(sm.rename(columns={"sellmate_stock":"셀메이트재고"}), on="product_no", how="left")
+    df = df.merge(sm_by_no, on="product_no", how="left")
+    df = df.merge(sm_by_name, on="상품명", how="left")
+    df["셀메이트재고"] = df["셀메이트재고"].fillna(df["셀메이트재고_상품명매칭"])
+    df = df.drop(columns=["셀메이트재고_상품명매칭"], errors="ignore")
 
     today = date.today()
     def sales_n(n):
