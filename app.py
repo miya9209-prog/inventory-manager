@@ -62,6 +62,16 @@ DB_PATH = get_secret("app", "db_path", "selleros_inventory.db")
 USE_SAMPLE = bool(get_secret("app", "use_sample_data", True))
 db = DB(DB_PATH)
 
+# 카페24 승인 후 Redirect URI로 돌아온 code 자동 감지
+query_params = st.query_params
+AUTO_CAFE24_CODE = query_params.get("code", "")
+if isinstance(AUTO_CAFE24_CODE, list):
+    AUTO_CAFE24_CODE = AUTO_CAFE24_CODE[0] if AUTO_CAFE24_CODE else ""
+
+if AUTO_CAFE24_CODE:
+    st.success("카페24 승인 code가 감지되었습니다. 아래 'Access Token 발급' 버튼을 눌러 토큰을 발급하세요.")
+
+
 st.markdown("<div class='main-title'>재고 관제센터</div>", unsafe_allow_html=True)
 st.markdown(
     "<div class='sub-title'>셀메이트 재고 CSV/엑셀을 직접 업로드해 DB를 업데이트하고, 카페24 판매상태와 비교해 품절위험·입고추천·시즌오픈추천·악성재고를 판단합니다.</div>",
@@ -146,7 +156,10 @@ with st.expander("2) 카페24 상품/주문 동기화", expanded=False):
         else:
             st.warning("Secrets에 카페24 설정이 필요합니다.")
 
-        code = st.text_input("카페24 승인 후 code 붙여넣기", type="password")
+        code = st.text_input("카페24 승인 후 code 붙여넣기", value=AUTO_CAFE24_CODE if AUTO_CAFE24_CODE else "", type="password")
+        if AUTO_CAFE24_CODE:
+            st.caption("자동 감지된 code")
+            st.code(AUTO_CAFE24_CODE, language="text")
         if st.button("Access Token 발급") and code:
             try:
                 token = cafe.exchange_code(code)

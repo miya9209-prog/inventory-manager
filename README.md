@@ -28,3 +28,14 @@
 - 카페24 옵션 재고 합산 구조 포함
 - 품절위험, 입고추천, 시즌오픈추천, 악성재고 판단
 - 알림 로그 확장 가능
+
+
+## 카페24 OAuth code 자동 감지 수정
+- 카페24 승인 후 `https://ms-inventory-manager.streamlit.app/oauth?code=...` 로 돌아오면 앱이 code를 자동 감지합니다.
+- code 입력칸에 자동으로 값이 들어갑니다.
+- 사용자는 `Access Token 발급` 버튼만 누르면 됩니다.
+- 카페24 개발자센터 Redirect URI는 아래 하나만 등록하세요.
+
+```text
+https://ms-inventory-manager.streamlit.app/oauth
+```
