@@ -28,17 +28,31 @@ class Cafe24Client:
         return f"{self.base}/oauth/authorize?{urlencode(params)}"
 
     def exchange_code(self, code):
+        import base64
+
+        # Cafe24 OAuth token exchange requires HTTP Basic Auth:
+        # Authorization: Basic base64(client_id:client_secret)
         url = f"{self.base}/oauth/token"
+
+        auth_raw = f"{self.client_id}:{self.client_secret}"
+        auth_b64 = base64.b64encode(auth_raw.encode("utf-8")).decode("utf-8")
+
+        headers = {
+            "Authorization": f"Basic {auth_b64}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+
         data = {
             "grant_type": "authorization_code",
-            "code": code,
+            "code": str(code).strip(),
             "redirect_uri": self.redirect_uri,
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
         }
-        r = requests.post(url, data=data, timeout=30)
+
+        r = requests.post(url, headers=headers, data=data, timeout=30)
+
         if r.status_code >= 400:
             raise Exception(r.text)
+
         return r.json()
 
     def headers(self):

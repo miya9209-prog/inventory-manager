@@ -30,20 +30,7 @@
 - 알림 로그 확장 가능
 
 
-## 2026-05 OAuth 토큰 발급 수정 반영
-- 카페24 승인 후 URL에 붙어 돌아오는 `code`를 앱에서 자동 감지합니다.
-- Access Token 발급 시 Cafe24 OAuth 요구 방식에 맞춰 Basic Auth 헤더를 사용합니다.
-- 카페24 개발자센터 Redirect URI는 아래 하나만 등록하세요.
-
-```text
-https://ms-inventory-manager.streamlit.app/oauth
-```
-
-## 적용 후 필수 작업
-1. GitHub에 전체 덮어쓰기
-2. Streamlit Clear cache
-3. Streamlit Reboot app
-4. 카페24 권한 승인 URL 열기
-5. 돌아온 code 자동 감지 확인
-6. Access Token 발급 클릭
-7. 발급된 access_token / refresh_token을 Streamlit Secrets에 저장
+## OAuth 토큰 발급 수정 v2
+- `code` 자동 감지
+- token endpoint 요청 시 Client ID/Secret을 body가 아니라 Basic Auth 헤더로 전송
+- `code`는 1회성/단기 유효이므로 토큰 발급 실패 후에는 반드시 새로 승인 URL을 열어 새 code를 받아야 합니다.
