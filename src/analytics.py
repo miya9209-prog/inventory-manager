@@ -96,9 +96,7 @@ def build_product_metrics(db):
             return pd.DataFrame(columns=["product_no", f"{n}일판매"])
         start = today - timedelta(days=n - 1)
         s = sales[pd.to_datetime(sales["sales_date"]).dt.date >= start]
-        return s.groupby("product_no", as_index=False)["order_qty"].sum().rename(columns={
-            "order_qty": f"{n}일판매"
-        })
+        return s.groupby("product_no", as_index=False)["order_qty"].sum().rename(columns={"order_qty": f"{n}일판매"})
 
     for n in [3, 7, 14, 30]:
         df = df.merge(sales_n(n), on="product_no", how="left")

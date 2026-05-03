@@ -27,7 +27,6 @@ class DB:
                 updated_at TEXT
             )
             """)
-
             con.execute("""
             CREATE TABLE IF NOT EXISTS inventory_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +37,6 @@ class DB:
                 captured_at TEXT
             )
             """)
-
             con.execute("""
             CREATE TABLE IF NOT EXISTS sellmate_stock (
                 product_no TEXT,
@@ -48,7 +46,6 @@ class DB:
                 updated_at TEXT
             )
             """)
-
             con.execute("""
             CREATE TABLE IF NOT EXISTS sales_daily (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,7 +57,6 @@ class DB:
                 returned_qty INTEGER DEFAULT 0
             )
             """)
-
             con.execute("""
             CREATE TABLE IF NOT EXISTS alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,9 +74,6 @@ class DB:
     def df(self, sql, params=None):
         with self.conn() as con:
             return pd.read_sql_query(sql, con, params=params or [])
-
-    def count_products(self):
-        return int(self.df("SELECT COUNT(*) AS cnt FROM products").iloc[0]["cnt"])
 
     def reset_all(self):
         with self.conn() as con:

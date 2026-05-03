@@ -28,18 +28,15 @@ def _read(file):
 
 def _find_col(df, candidates):
     norm = {str(c).strip().lower(): c for c in df.columns}
-
     for cand in candidates:
         key = cand.strip().lower()
         if key in norm:
             return norm[key]
-
     for col in df.columns:
         c = str(col).strip().lower()
         for cand in candidates:
             if cand.strip().lower() in c:
                 return col
-
     return None
 
 def parse_sellmate_stock_file(file):
@@ -62,7 +59,6 @@ def parse_sellmate_stock_file(file):
         raise ValueError("재고 컬럼을 찾지 못했습니다. 가용재고/현재재고/현재고/재고수량 중 하나가 필요합니다.")
 
     out = pd.DataFrame()
-
     if "product_no" in mapped:
         out["product_no"] = df[mapped["product_no"]].astype(str).str.strip()
     else:
