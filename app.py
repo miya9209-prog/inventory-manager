@@ -104,21 +104,45 @@ with st.expander("2) 카페24 상품/주문/옵션재고 동기화", expanded=Fa
         api_version=api_version,
     )
 
+
+    def sync_cafe24_with_retry():
+        """
+        access_token 만료 시 refresh_token으로 새 토큰을 발급한 뒤 1회 재시도합니다.
+        새 토큰은 화면에 표시되므로 Streamlit Secrets에 복사 저장해야 합니다.
+        """
+        try:
+            products_payload = cafe.fetch_products(limit=100)
+        except Exception as first_error:
+            msg = str(first_error)
+            if "invalid_token" in msg or "access_token time expired" in msg or "401" in msg:
+                if not refresh_token:
+                    raise Exception("access_token이 만료되었고 refresh_token도 없습니다. 카페24 최초 인증을 다시 진행하세요.")
+                new_token = cafe.refresh_access_token()
+                st.warning("access_token이 만료되어 refresh_token으로 새 토큰을 발급했습니다. 아래 값을 Streamlit Secrets에 저장하세요.")
+                st.json(new_token)
+                cafe.access_token = new_token.get("access_token", cafe.access_token)
+                cafe.refresh_token = new_token.get("refresh_token", cafe.refresh_token)
+                products_payload = cafe.fetch_products(limit=100)
+            else:
+                raise first_error
+
+        product_rows, inventory_rows = cafe.normalize_products_with_option_stock(products_payload)
+        db.upsert_products(product_rows)
+        db.insert_inventory_snapshots(inventory_rows)
+
+        orders_payload = cafe.fetch_orders(days=14, limit=100)
+        sales_rows = cafe.normalize_orders(orders_payload)
+        if sales_rows:
+            db.insert_sales_daily(sales_rows)
+
+        return product_rows, inventory_rows, sales_rows
+
     col1, col2, col3 = st.columns(3)
 
     with col1:
         if st.button("카페24 상품/주문/옵션재고 동기화", type="primary"):
             try:
-                products_payload = cafe.fetch_products(limit=100)
-                product_rows, inventory_rows = cafe.normalize_products_with_option_stock(products_payload)
-                db.upsert_products(product_rows)
-                db.insert_inventory_snapshots(inventory_rows)
-
-                orders_payload = cafe.fetch_orders(days=14, limit=100)
-                sales_rows = cafe.normalize_orders(orders_payload)
-                if sales_rows:
-                    db.insert_sales_daily(sales_rows)
-
+                product_rows, inventory_rows, sales_rows = sync_cafe24_with_retry()
                 st.success(
                     f"동기화 완료: 상품 {len(product_rows)}개, 옵션재고 {len(inventory_rows)}건, 주문일별 {len(sales_rows)}건"
                 )
@@ -163,6 +187,15 @@ with st.expander("2) 카페24 상품/주문/옵션재고 동기화", expanded=Fa
                 st.json(token)
             except Exception as e:
                 st.error(f"토큰 발급 실패: {e}")
+
+        if st.button("Refresh Token으로 Access Token 갱신"):
+            try:
+                new_token = cafe.refresh_access_token()
+                st.success("토큰 갱신 성공. 아래 access_token / refresh_token 값을 Streamlit Secrets에 저장하세요.")
+                st.json(new_token)
+            except Exception as e:
+                st.error(f"토큰 갱신 실패: {e}")
+
 
 if USE_SAMPLE and db.count_products() == 0:
     seed_sample_data(db)
