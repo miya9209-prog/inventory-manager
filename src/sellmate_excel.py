@@ -1,5 +1,5 @@
-import pandas as pd
 import io
+import pandas as pd
 
 COLUMN_CANDIDATES = {
     "product_no": ["product_no", "상품코드", "상품번호", "판매처상품코드", "자체상품코드", "품목코드", "코드"],
@@ -10,17 +10,13 @@ COLUMN_CANDIDATES = {
 
 def _read_csv_bytes(file):
     raw = file.getvalue() if hasattr(file, "getvalue") else file.read()
-    encodings = ["cp949", "euc-kr", "utf-8-sig", "utf-8"]
-    last_error = None
 
-    for enc in encodings:
+    for enc in ["cp949", "euc-kr", "utf-8-sig", "utf-8"]:
         try:
             return pd.read_csv(io.BytesIO(raw), encoding=enc)
-        except UnicodeDecodeError as e:
-            last_error = e
+        except UnicodeDecodeError:
             continue
 
-    # 마지막 안전장치: 깨지는 글자는 대체해서라도 읽기
     text = raw.decode("cp949", errors="replace")
     return pd.read_csv(io.StringIO(text))
 
@@ -32,6 +28,7 @@ def _read(file):
 
 def _find_col(df, candidates):
     norm = {str(c).strip().lower(): c for c in df.columns}
+
     for cand in candidates:
         key = cand.strip().lower()
         if key in norm:
@@ -42,9 +39,10 @@ def _find_col(df, candidates):
         for cand in candidates:
             if cand.strip().lower() in c:
                 return col
+
     return None
 
-def parse_sellmate_excel(file):
+def parse_sellmate_stock_file(file):
     df = _read(file)
     df = df.loc[:, ~df.columns.astype(str).str.startswith("Unnamed")]
 
@@ -59,12 +57,12 @@ def parse_sellmate_excel(file):
 
     if "product_name" not in mapped and "product_no" not in mapped:
         raise ValueError("상품명 또는 상품코드 컬럼을 찾지 못했습니다.")
+
     if "sellmate_stock" not in mapped:
         raise ValueError("재고 컬럼을 찾지 못했습니다. 가용재고/현재재고/현재고/재고수량 중 하나가 필요합니다.")
 
     out = pd.DataFrame()
 
-    # 셀메이트 CSV에 상품코드가 없는 경우가 많아 상품명을 임시 키로 사용
     if "product_no" in mapped:
         out["product_no"] = df[mapped["product_no"]].astype(str).str.strip()
     else:
@@ -73,8 +71,8 @@ def parse_sellmate_excel(file):
     out["product_name"] = df[mapped["product_name"]].astype(str).str.strip() if "product_name" in mapped else out["product_no"]
     out["option_name"] = df[mapped["option_name"]].astype(str).str.strip() if "option_name" in mapped else ""
 
-    stock = df[mapped["sellmate_stock"]]
-    stock = stock.astype(str).str.replace(",", "", regex=False).str.replace("=", "", regex=False).str.replace('"', "", regex=False)
+    stock = df[mapped["sellmate_stock"]].astype(str)
+    stock = stock.str.replace(",", "", regex=False).str.replace("=", "", regex=False).str.replace('"', "", regex=False)
     out["sellmate_stock"] = pd.to_numeric(stock, errors="coerce").fillna(0).astype(int)
 
     out = out[
@@ -88,4 +86,4 @@ def parse_sellmate_excel(file):
         as_index=False
     )["sellmate_stock"].sum()
 
-    return out
+    return out, list(df.columns)

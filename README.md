@@ -1,36 +1,37 @@
-# 재고 관제센터
+# 재고 관제센터 전체 완성본
 
-## v2 변경사항
-- 셀메이트 CSV 인코딩 오류 수정: cp949/euc-kr 자동 인식
-- 업로드 파일 예시: stk_stockList_20260502_001341.csv
-- 셀메이트 파일에 상품코드가 없어도 상품명 기준 임시 매칭 가능
-- 가용재고 컬럼을 우선 재고로 인식
-- 카페24 인증 버튼을 '최초 인증' 영역으로 숨김
-- 실제 운영 시에는 '카페24 상품/주문 동기화'만 사용
-
-## 운영 흐름
-1. 셀메이트 재고 파일 업로드
-2. 셀메이트 재고 DB 업데이트
-3. 카페24 상품/주문 동기화
-4. 긴급 알림/품절 위험/입고 추천 확인
-
-
-## v3
-- 셀메이트 CSV CP949/EUC-KR 인코딩 처리 강화
-- utf-8 decode 오류 수정
-
-
-## 풀버전 운영 기준
+## 포함 기능
 - 셀메이트 CSV/엑셀 직접 업로드
 - CP949/EUC-KR CSV 자동 인식
 - 셀메이트 가용재고 기준 DB 업데이트
-- 카페24 상품/주문 동기화
-- 카페24 옵션 재고 합산 구조 포함
+- 카페24 OAuth code 자동 감지
+- 카페24 Access Token 발급
+- 카페24 상품/주문/옵션재고 동기화
+- options API 우선 조회, variants API fallback
+- 카페24 옵션 재고 합산
+- 셀메이트 실제재고 vs 카페24 재고/품절상태 비교
 - 품절위험, 입고추천, 시즌오픈추천, 악성재고 판단
-- 알림 로그 확장 가능
+- 카페24 옵션재고 스냅샷 확인 탭
+- 알림 로그 탭
 
+## Streamlit Secrets 예시
+```toml
+[app]
+db_path = "selleros_inventory.db"
+use_sample_data = true
 
-## OAuth 토큰 발급 수정 v2
-- `code` 자동 감지
-- token endpoint 요청 시 Client ID/Secret을 body가 아니라 Basic Auth 헤더로 전송
-- `code`는 1회성/단기 유효이므로 토큰 발급 실패 후에는 반드시 새로 승인 URL을 열어 새 code를 받아야 합니다.
+[cafe24]
+mall_id = "miyawa"
+client_id = "카페24 Client ID"
+client_secret = "카페24 Client Secret"
+redirect_uri = "https://ms-inventory-manager.streamlit.app/oauth"
+access_token = ""
+refresh_token = ""
+api_version = "2026-03-01"
+```
+
+## 운영 순서
+1. 셀메이트 재고 파일 업로드
+2. 셀메이트 재고 DB 업데이트
+3. 카페24 상품/주문/옵션재고 동기화
+4. 긴급 알림/품절 위험/입고 추천 확인

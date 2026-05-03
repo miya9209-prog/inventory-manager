@@ -6,6 +6,7 @@ def get_secret(section, key, default=None):
             return st.secrets[section][key]
     except Exception:
         pass
+
     try:
         flat_key = f"{section.upper()}_{key.upper()}"
         return st.secrets.get(flat_key, default)
