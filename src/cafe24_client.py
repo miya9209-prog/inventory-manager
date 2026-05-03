@@ -89,8 +89,15 @@ class Cafe24Client:
         return self._request("GET", path, params)
 
     def fetch_all_products(self, limit=100, max_pages=50):
-        rows=[]; offset=0
+        """
+        Cafe24 list APIs reject offset >= 5000.
+        상품 수가 많은 쇼핑몰에서도 앱이 죽지 않도록 5000 직전에 안전 중단합니다.
+        대부분의 운영 판단은 최근/진열 상품 중심이라 5000개 한도 내에서도 우선 동기화가 가능합니다.
+        """
+        rows=[]; offset=0; limit=min(int(limit or 100), 100)
         for _ in range(max_pages):
+            if offset >= 5000:
+                break
             data = self._get("/admin/products", {"limit": limit, "offset": offset})
             part = data.get("products", []) if isinstance(data, dict) else []
             rows.extend(part)
@@ -178,15 +185,34 @@ class Cafe24Client:
             inv_rows.extend(opts)
         return product_rows, inv_rows
 
-    def fetch_orders(self, days=30, limit=100, max_pages=20):
-        end = datetime.now(); start = end - timedelta(days=days)
-        orders=[]; offset=0
-        for _ in range(max_pages):
-            data = self._get("/admin/orders", {"start_date": start.strftime("%Y-%m-%d"), "end_date": end.strftime("%Y-%m-%d"), "limit": limit, "offset": offset})
-            part = data.get("orders", []) if isinstance(data, dict) else []
-            orders.extend(part)
-            if len(part) < limit: break
-            offset += limit
+    def fetch_orders(self, days=30, limit=100, max_pages=50):
+        """
+        Cafe24 주문 목록은 offset 5000 이상을 허용하지 않습니다.
+        30일 주문을 한 번에 offset으로 넘기면 주문 많은 기간에 422가 발생하므로,
+        날짜를 하루 단위로 쪼개고 각 날짜 안에서도 offset < 5000까지만 조회합니다.
+        """
+        limit=min(int(limit or 100), 100)
+        end_day = datetime.now().date()
+        start_day = end_day - timedelta(days=int(days or 30))
+        orders=[]
+        cur = start_day
+        while cur <= end_day:
+            offset=0; pages=0
+            next_day = cur + timedelta(days=1)
+            while pages < max_pages and offset < 5000:
+                data = self._get("/admin/orders", {
+                    "start_date": cur.strftime("%Y-%m-%d"),
+                    "end_date": next_day.strftime("%Y-%m-%d"),
+                    "limit": limit,
+                    "offset": offset,
+                })
+                part = data.get("orders", []) if isinstance(data, dict) else []
+                orders.extend(part)
+                if len(part) < limit:
+                    break
+                offset += limit
+                pages += 1
+            cur = next_day
         return orders
 
     def normalize_orders(self, orders):
